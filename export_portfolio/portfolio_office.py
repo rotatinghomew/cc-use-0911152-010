@@ -10,10 +10,12 @@ from export_portfolio.stages.investment_gates import advance_for_outcome, decide
 from export_portfolio.board.portfolio_book import export_bundle, verify_bundle
 from export_portfolio.optimization.constrained_selection import derive_context
 
+from export_portfolio.governance.resource_book import ResourceBook
 
 class Application:
     def __init__(self, database: str | Path, context: Mapping[str, Any] | None = None):
         self.repository = Repository(database)
+        self.resource_book = ResourceBook(self.repository)
         self.context = dict(context or {})
 
     def ingest(self, record: DomainRecord) -> DomainRecord:
@@ -64,6 +66,9 @@ class Application:
     def inspect(self) -> dict[str, Any]:
         return {"snapshot": self.repository.snapshot(), "records": [record.__dict__ for record in self.repository.list_records()],
                 "decisions": self.repository.decision_rows()}
+
+    def policy_impact(self, event_id: str) -> dict[str, Any]:
+        return self.repository.policy_impact(event_id)
 
 
 def load_fixture(path: str | Path) -> dict[str, Any]:
