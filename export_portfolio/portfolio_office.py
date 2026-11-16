@@ -11,11 +11,13 @@ from export_portfolio.board.portfolio_book import export_bundle, verify_bundle
 from export_portfolio.optimization.constrained_selection import derive_context
 
 from export_portfolio.governance.resource_book import ResourceBook
+from export_portfolio.governance.dependency_book import DependencyBook
 
 class Application:
     def __init__(self, database: str | Path, context: Mapping[str, Any] | None = None):
         self.repository = Repository(database)
         self.resource_book = ResourceBook(self.repository)
+        self.dependency_book = DependencyBook(self.repository)
         self.context = dict(context or {})
 
     def ingest(self, record: DomainRecord) -> DomainRecord:
@@ -34,6 +36,9 @@ class Application:
         stored = self.ingest(record)
         context = dict(self.context)
         context.update(derive_context(stored, self.repository))
+        # 依赖网络传导报告进入阶段门禁：全网络分析（保留多路径与循环），按项目取阻塞；
+        # 无登记依赖时报告为空，保持原有行为
+        context['dependency_report'] = self.dependency_book.analyze().as_dict()
         decision = decide(stored, context)
         self.repository.save_decision(decision)
         advanced = advance_for_outcome(stored, decision)
@@ -69,6 +74,28 @@ class Application:
 
     def policy_impact(self, event_id: str) -> dict[str, Any]:
         return self.repository.policy_impact(event_id)
+
+    def board_dependency_review(self, review_id: str, trigger: str = "board-review") -> dict[str, Any]:
+        """董事会例行审议：沉淀全量依赖网络传导快照及相对上次的实质变化。"""
+        return self.dependency_book.record_gate_review(review_id, trigger)
+
+    def reevaluate_dependency_evidence(self, node_id: str, review_id: str,
+                                       evidence: Mapping[str, Any] | None = None,
+                                       withdraw_reason: str | None = None,
+                                       mark_missing: bool = False) -> dict[str, Any]:
+        """真实证据变化后只重评受影响的待推进项目，其他项目不进入本次审议。"""
+        return self.dependency_book.reevaluate_after_evidence_change(
+            node_id, review_id, evidence=evidence,
+            withdraw_reason=withdraw_reason, mark_missing=mark_missing)
+
+    def simulate_dependency_scenario(self, overrides: Mapping[str, str],
+                                     project_ids: list[str] | None = None) -> dict[str, Any]:
+        """情景推演：仅作比较，不落库、不改项目实际阶段。"""
+        return self.dependency_book.run_scenario(overrides, project_ids).as_dict()
+
+    def trace_dependency_blocker(self, project_id: str, node_id: str) -> dict[str, Any]:
+        """沿阻塞原因追到历次审议与所用证据修订。"""
+        return self.dependency_book.trace_blocker(project_id, node_id)
 
 
 def load_fixture(path: str | Path) -> dict[str, Any]:

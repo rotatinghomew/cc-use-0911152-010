@@ -1133,13 +1133,33 @@ def guard_report(record: DomainRecord, context: Mapping[str, Any] | None = None)
     return {'passed': sum(item[0] for item in results), 'failed': sum(not item[0] for item in results),
             'messages': [item[1] for item in results]}
 
+def dependency_gate_blockers(record: DomainRecord, context: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    """阶段门禁的依赖网络阻塞：单项准备度无法替代的硬性拦截。
+
+    context['dependency_report'] 为 DependencyBook.analyze() 的传导报告（dict 形式）。
+    阻塞按 project+node 独立存在，因此解除一项依赖不会误解除另一项。
+    """
+    context = context or {}
+    report = context.get('dependency_report')
+    if not report:
+        return []
+    for risk in report.get('project_risks', ()):
+        if risk.get('project_id') == record.record_id and risk.get('blocked'):
+            return list(risk.get('blockers', ()))
+    return []
+
+
 def decide(record: DomainRecord, context: Mapping[str, Any] | None = None) -> Decision:
     context = context or {}
     rules = evaluate(record, context)
     scorecard = record_score(record, context)
     guards = guard_report(record, context)
     critical = sum(item.severity == 'critical' for item in rules)
-    if critical:
+    dependency_blockers = dependency_gate_blockers(record, context)
+    if dependency_blockers:
+        # 依赖未落实/缺证/失效传导：无论单项准备度多高，门禁强制 hold，不得继续推进
+        outcome = 'hold'
+    elif critical:
         outcome = 'hold'
     elif scorecard['score'] >= float(context.get('approve_threshold', 0.62)) and guards['passed'] >= guards['failed']:
         outcome = 'approve'
@@ -1147,8 +1167,11 @@ def decide(record: DomainRecord, context: Mapping[str, Any] | None = None) -> De
         outcome = 'review'
     else:
         outcome = 'reject'
+    dependency_reasons = tuple(
+        f"dependency:{blocker['node_id']}:{blocker['origin']}:{blocker['state']}"
+        for blocker in dependency_blockers)
     reasons = (f"score={scorecard['score']:.6f}", f"critical={critical}",
-               f"guards={guards['passed']}/{guards['passed'] + guards['failed']}")
+               f"guards={guards['passed']}/{guards['passed'] + guards['failed']}") + dependency_reasons
     return Decision(record.record_id, outcome, scorecard['score'], reasons, rules, scorecard['metrics'])
 
 def advance_for_outcome(record: DomainRecord, decision: Decision) -> DomainRecord:
